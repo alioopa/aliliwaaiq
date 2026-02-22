@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 
 from cryptography.fernet import Fernet
-from pydantic import Field, field_validator
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -80,6 +80,80 @@ class Settings(BaseSettings):
     @property
     def database_url_sync(self) -> str:
         return self.database_url.replace("+asyncpg", "")
+
+    @staticmethod
+    def _contains_placeholder(value: str, placeholders: tuple[str, ...]) -> bool:
+        lowered = value.lower()
+        return any(marker.lower() in lowered for marker in placeholders)
+
+    def preflight_checks(self) -> dict:
+        checks: list[dict] = []
+
+        def add(name: str, ok: bool, details: str) -> None:
+            checks.append({"name": name, "ok": ok, "details": details})
+
+        token = self.master_bot_token.strip()
+        add("master_bot_token_set", bool(token), "MASTER_BOT_TOKEN must be set.")
+        add(
+            "master_bot_token_not_placeholder",
+            bool(token) and "MASTER_BOT_TOKEN_FROM_BOTFATHER" not in token,
+            "MASTER_BOT_TOKEN must be a real token from BotFather.",
+        )
+
+        add(
+            "master_admin_ids_parsed",
+            len(self.admin_id_set) > 0,
+            "MASTER_ADMIN_IDS should include at least one numeric Telegram ID.",
+        )
+
+        webhook = (self.webhook_base_url or "").strip()
+        add(
+            "webhook_base_url_https",
+            webhook.startswith("https://"),
+            "WEBHOOK_BASE_URL should start with https://",
+        )
+        add(
+            "webhook_base_url_not_placeholder",
+            webhook != "" and not self._contains_placeholder(webhook, ("your-railway-public-domain", "example")),
+            "WEBHOOK_BASE_URL should be your real Railway public domain.",
+        )
+
+        db_url = self.database_url.strip()
+        add("database_url_set", bool(db_url), "DATABASE_URL must be set.")
+        add(
+            "database_url_not_localhost",
+            not self._contains_placeholder(db_url, ("localhost", "127.0.0.1")),
+            "DATABASE_URL must reference Railway Postgres, not localhost.",
+        )
+        add(
+            "database_url_asyncpg",
+            "+asyncpg" in db_url,
+            "DATABASE_URL should use postgresql+asyncpg://",
+        )
+
+        redis_url = self.redis_url.strip()
+        add("redis_url_set", bool(redis_url), "REDIS_URL must be set.")
+        add(
+            "redis_url_not_localhost",
+            not self._contains_placeholder(redis_url, ("localhost", "127.0.0.1")),
+            "REDIS_URL must reference Railway Redis, not localhost.",
+        )
+
+        try:
+            Fernet(self.bot_token_encryption_key.encode("utf-8"))
+            fernet_ok = True
+        except Exception:
+            fernet_ok = False
+        add(
+            "bot_token_encryption_key_valid",
+            fernet_ok,
+            "BOT_TOKEN_ENCRYPTION_KEY must be a valid Fernet key.",
+        )
+
+        ops_key = (self.ops_api_key or "").strip()
+        add("ops_api_key_set", bool(ops_key), "OPS_API_KEY should be set for /ops endpoints.")
+
+        return {"ok": all(item["ok"] for item in checks), "checks": checks}
 
     def validate_runtime(self) -> None:
         missing = []

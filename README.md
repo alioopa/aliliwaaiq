@@ -163,3 +163,12 @@ celery -A app.tasks.celery_app.celery_app beat -l info
     - `POST /ops/sync-client-webhooks` with header `x-ops-key: <OPS_API_KEY>`
   - Check:
     - `GET /ops/status` with header `x-ops-key: <OPS_API_KEY>`
+
+## Railway Automation
+
+- Generate ready-to-paste Railway env blocks (with secure random keys):
+  - `python scripts/railway_bootstrap.py --domain web-production-7468f.up.railway.app --master-token "REPLACE_WITH_NEW_TOKEN" --admin-ids "123456789"`
+- Run end-to-end checks and optional webhook sync:
+  - `python scripts/railway_preflight.py --domain web-production-7468f.up.railway.app --ops-key YOUR_OPS_KEY --master-token YOUR_MASTER_TOKEN --sync-webhooks`
+- Full operational checklist:
+  - `RAILWAY_FIX_CHECKLIST.md`

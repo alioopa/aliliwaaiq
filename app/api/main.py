@@ -104,9 +104,11 @@ def _require_ops_auth(request: Request) -> None:
 async def ops_status(request: Request):
     _require_ops_auth(request)
     settings = request.app.state.settings
+    preflight = settings.preflight_checks()
     result: dict = {
         "webhook_base_url": settings.webhook_base_url or "",
         "master_admin_ids_count": len(settings.admin_id_set),
+        "preflight_ok": preflight["ok"],
     }
     bot = Bot(settings.master_bot_token)
     try:
@@ -127,6 +129,15 @@ async def ops_status(request: Request):
             )
         )
     result["running_client_bots"] = int(running_count or 0)
+    return result
+
+
+@app.get("/ops/preflight")
+async def ops_preflight(request: Request):
+    _require_ops_auth(request)
+    settings = request.app.state.settings
+    result = settings.preflight_checks()
+    result["environment"] = settings.environment
     return result
 
 
