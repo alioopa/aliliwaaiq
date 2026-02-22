@@ -46,6 +46,27 @@ alembic/
 
 ## التشغيل المحلي
 
+### تشغيل سريع جدًا (Minimal Mode)
+
+يكفي متغير واحد فقط:
+
+```env
+MASTER_BOT_TOKEN=توكن_البوت_من_BotFather
+```
+
+ثم شغّل:
+
+```bash
+python -m app.run
+```
+
+ملاحظات:
+- في هذا الوضع يتم استخدام `sqlite` و `fakeredis` تلقائيًا.
+- إذا تركت `WEBHOOK_BASE_URL` فارغًا، البوت يعمل بـ polling مباشرة.
+- الأوامر الإدارية تعمل حتى لو `MASTER_ADMIN_IDS` فارغ (bootstrap mode).
+
+### تشغيل إنتاجي كامل (Postgres + Redis + Webhooks)
+
 1) إنشاء ملف `.env` من `.env.example`.
 
 2) توليد مفتاح تشفير التوكنات (Fernet):

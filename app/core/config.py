@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 from functools import lru_cache
 
 from cryptography.fernet import Fernet
@@ -21,8 +23,8 @@ class Settings(BaseSettings):
     port: int = 8000
     default_timezone: str = "UTC"
 
-    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/telegram_platform"
-    redis_url: str = "redis://localhost:6379/0"
+    database_url: str = "sqlite+aiosqlite:///./local.db"
+    redis_url: str = "fakeredis://local"
     celery_broker_url: str | None = None
     celery_result_backend: str | None = None
 
@@ -70,12 +72,29 @@ class Settings(BaseSettings):
         return parsed
 
     @property
+    def token_encryption_key_effective(self) -> str:
+        value = self.bot_token_encryption_key.strip()
+        if value:
+            return value
+        # Minimal mode fallback: deterministic key from master token.
+        raw = hashlib.sha256((self.master_bot_token + "|tbm-minimal").encode("utf-8")).digest()
+        return base64.urlsafe_b64encode(raw).decode("utf-8")
+
+    @property
     def celery_broker(self) -> str:
-        return self.celery_broker_url or self.redis_url
+        if self.celery_broker_url:
+            return self.celery_broker_url
+        if self.redis_url.startswith("fakeredis://"):
+            return "memory://"
+        return self.redis_url
 
     @property
     def celery_backend(self) -> str:
-        return self.celery_result_backend or self.redis_url
+        if self.celery_result_backend:
+            return self.celery_result_backend
+        if self.redis_url.startswith("fakeredis://"):
+            return "cache+memory://"
+        return self.redis_url
 
     @property
     def database_url_sync(self) -> str:
@@ -89,8 +108,8 @@ class Settings(BaseSettings):
     def preflight_checks(self) -> dict:
         checks: list[dict] = []
 
-        def add(name: str, ok: bool, details: str) -> None:
-            checks.append({"name": name, "ok": ok, "details": details})
+        def add(name: str, ok: bool, details: str, advisory: bool = False) -> None:
+            checks.append({"name": name, "ok": ok, "details": details, "advisory": advisory})
 
         token = self.master_bot_token.strip()
         add("master_bot_token_set", bool(token), "MASTER_BOT_TOKEN must be set.")
@@ -103,69 +122,80 @@ class Settings(BaseSettings):
         add(
             "master_admin_ids_parsed",
             len(self.admin_id_set) > 0,
-            "MASTER_ADMIN_IDS should include at least one numeric Telegram ID.",
+            "Optional in minimal mode. If empty, bootstrap mode allows first admin access.",
+            advisory=True,
         )
 
         webhook = (self.webhook_base_url or "").strip()
         add(
             "webhook_base_url_https",
-            webhook.startswith("https://"),
-            "WEBHOOK_BASE_URL should start with https://",
+            webhook == "" or webhook.startswith("https://"),
+            "Optional in minimal mode. Keep empty to use polling; set https:// URL for webhooks.",
         )
         add(
             "webhook_base_url_not_placeholder",
-            webhook != "" and not self._contains_placeholder(webhook, ("your-railway-public-domain", "example")),
-            "WEBHOOK_BASE_URL should be your real Railway public domain.",
+            webhook == "" or not self._contains_placeholder(webhook, ("your-railway-public-domain", "example")),
+            "If set, WEBHOOK_BASE_URL should be your real Railway public domain.",
         )
 
         db_url = self.database_url.strip()
         add("database_url_set", bool(db_url), "DATABASE_URL must be set.")
         add(
             "database_url_not_localhost",
-            not self._contains_placeholder(db_url, ("localhost", "127.0.0.1")),
-            "DATABASE_URL must reference Railway Postgres, not localhost.",
+            db_url.startswith("sqlite+") or not self._contains_placeholder(db_url, ("localhost", "127.0.0.1")),
+            "Minimal mode accepts sqlite. Otherwise use Railway Postgres (not localhost).",
         )
         add(
             "database_url_asyncpg",
-            "+asyncpg" in db_url,
-            "DATABASE_URL should use postgresql+asyncpg://",
+            db_url.startswith("sqlite+") or "+asyncpg" in db_url,
+            "Postgres mode should use postgresql+asyncpg:// (sqlite allowed in minimal mode).",
         )
 
         redis_url = self.redis_url.strip()
         add("redis_url_set", bool(redis_url), "REDIS_URL must be set.")
         add(
             "redis_url_not_localhost",
-            not self._contains_placeholder(redis_url, ("localhost", "127.0.0.1")),
-            "REDIS_URL must reference Railway Redis, not localhost.",
+            redis_url.startswith("fakeredis://")
+            or not self._contains_placeholder(redis_url, ("localhost", "127.0.0.1")),
+            "Minimal mode accepts fakeredis. Otherwise use Railway Redis (not localhost).",
         )
 
+        source = "derived"
         try:
-            Fernet(self.bot_token_encryption_key.encode("utf-8"))
+            Fernet(self.token_encryption_key_effective.encode("utf-8"))
             fernet_ok = True
+            if self.bot_token_encryption_key.strip():
+                source = "env"
         except Exception:
             fernet_ok = False
         add(
             "bot_token_encryption_key_valid",
             fernet_ok,
-            "BOT_TOKEN_ENCRYPTION_KEY must be a valid Fernet key.",
+            f"BOT_TOKEN_ENCRYPTION_KEY must be a valid Fernet key (source={source}).",
         )
 
         ops_key = (self.ops_api_key or "").strip()
-        add("ops_api_key_set", bool(ops_key), "OPS_API_KEY should be set for /ops endpoints.")
+        add(
+            "ops_api_key_set",
+            bool(ops_key),
+            "Optional in minimal mode; required for /ops endpoints.",
+            advisory=True,
+        )
 
-        return {"ok": all(item["ok"] for item in checks), "checks": checks}
+        return {
+            "ok": all(item["ok"] for item in checks if not item["advisory"]),
+            "checks": checks,
+        }
 
     def validate_runtime(self) -> None:
         missing = []
         if not self.master_bot_token:
             missing.append("MASTER_BOT_TOKEN")
-        if not self.bot_token_encryption_key:
-            missing.append("BOT_TOKEN_ENCRYPTION_KEY")
         if missing:
             joined = ", ".join(missing)
             raise RuntimeError(f"Missing required environment variables: {joined}")
         try:
-            Fernet(self.bot_token_encryption_key.encode("utf-8"))
+            Fernet(self.token_encryption_key_effective.encode("utf-8"))
         except Exception as exc:
             raise RuntimeError("BOT_TOKEN_ENCRYPTION_KEY is invalid. Use Fernet.generate_key().") from exc
 

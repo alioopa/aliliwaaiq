@@ -101,7 +101,7 @@ def main() -> int:
             print_check("sync_client_webhooks", sync_clients_ok, f"status={status}, payload={payload}")
             overall_ok = overall_ok and sync_clients_ok
     else:
-        print("[SKIP] /ops checks skipped because --ops-key was not provided")
+        print("[SKIP] /ops checks skipped because --ops-key was not provided (minimal mode)")
 
     # 3) Telegram checks
     if args.master_token:
@@ -124,9 +124,11 @@ def main() -> int:
     else:
         print("[SKIP] Telegram checks skipped because --master-token was not provided")
 
+    if not args.ops_key:
+        print("[INFO] Minimal mode active: ops endpoints were not validated.")
+
     return 0 if overall_ok else 1
 
 
 if __name__ == "__main__":
     sys.exit(main())
-

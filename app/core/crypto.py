@@ -7,7 +7,7 @@ from app.core.config import get_settings
 
 def _get_fernet() -> Fernet:
     settings = get_settings()
-    return Fernet(settings.bot_token_encryption_key.encode("utf-8"))
+    return Fernet(settings.token_encryption_key_effective.encode("utf-8"))
 
 
 def encrypt_token(token: str) -> str:
@@ -21,4 +21,3 @@ def decrypt_token(token_encrypted: str) -> str:
         return fernet.decrypt(token_encrypted.encode("utf-8")).decode("utf-8")
     except InvalidToken as exc:
         raise ValueError("Invalid token encryption key or corrupted token payload.") from exc
-

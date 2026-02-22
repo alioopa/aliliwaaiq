@@ -2,6 +2,19 @@
 
 Use this checklist exactly in order.
 
+## Fastest Minimal Fix (Token Only)
+
+If you want the simplest possible setup:
+
+1. Deploy only `web` service.
+2. Set only:
+   - `MASTER_BOT_TOKEN=<NEW_TOKEN>`
+3. Keep `WEBHOOK_BASE_URL` empty.
+4. Start command:
+   - `python -m app.run`
+
+This runs in minimal mode using sqlite + fakeredis + polling.
+
 ## 1) Generate Valid Secrets + Env Blocks
 
 Run:
@@ -69,4 +82,3 @@ python scripts/railway_preflight.py \
 ```
 
 Exit code `0` means all checks passed.
-
