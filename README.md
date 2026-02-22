@@ -79,7 +79,7 @@ celery -A app.tasks.celery_app.celery_app beat -l info
 1. التطبيق يستمع على `0.0.0.0` وبورت `PORT`.
 2. نقطة `GET /health` ترجع `200 OK`.
 3. Start command للويب:
-   - `uvicorn app.api.main:app --host 0.0.0.0 --port ${PORT}`
+   - `python -m app.run`
 4. ملفات النشر متوفرة:
    - `Dockerfile`
    - `Procfile`
@@ -101,7 +101,7 @@ celery -A app.tasks.celery_app.celery_app beat -l info
    - `beat`
 5. إعداد أوامر التشغيل:
    - Web:
-     - `uvicorn app.api.main:app --host 0.0.0.0 --port ${PORT}`
+     - `python -m app.run`
    - Worker:
      - `celery -A app.tasks.celery_app.celery_app worker -l info --concurrency=2`
    - Beat:
