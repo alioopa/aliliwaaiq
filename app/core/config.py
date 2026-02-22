@@ -45,6 +45,16 @@ class Settings(BaseSettings):
             return value.rstrip("/")
         return value
 
+    @field_validator("database_url")
+    @classmethod
+    def normalize_database_url(cls, value: str) -> str:
+        url = value.strip()
+        if url.startswith("postgres://"):
+            url = "postgresql://" + url[len("postgres://") :]
+        if url.startswith("postgresql://") and "+asyncpg" not in url:
+            url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return url
+
     @property
     def admin_id_set(self) -> set[int]:
         if not self.master_admin_ids.strip():
