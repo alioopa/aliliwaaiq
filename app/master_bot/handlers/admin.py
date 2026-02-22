@@ -12,6 +12,7 @@ from sqlalchemy import select
 from app.bot_manager.manager import BotManager
 from app.core.config import get_settings
 from app.core.enums import PaymentStatus, PlanType
+from app.core.logging import get_logger
 from app.db.models import PaymentRequest
 from app.db.session import session_scope
 from app.master_bot.keyboards import master_panel_keyboard
@@ -30,10 +31,17 @@ from app.services.bot_service import (
 )
 
 router = Router(name="master_admin")
+logger = get_logger(__name__)
 
 
 def _is_admin(user_id: int) -> bool:
-    return user_id in get_settings().admin_id_set
+    settings = get_settings()
+    admins = settings.admin_id_set
+    if not admins:
+        # Bootstrap mode: prevent accidental lockout if MASTER_ADMIN_IDS was not configured.
+        logger.warning("master_admin_ids_missing_allowing_access_temporarily")
+        return True
+    return user_id in admins
 
 
 def _split(text: str) -> list[str]:
@@ -44,9 +52,17 @@ def _split(text: str) -> list[str]:
 async def start_master(message: Message) -> None:
     if not message.from_user or not _is_admin(message.from_user.id):
         return
+    await message.answer("لوحة إدارة المنصة.", reply_markup=master_panel_keyboard())
+
+
+@router.message(Command("myid"))
+async def myid_cmd(message: Message) -> None:
+    if not message.from_user:
+        return
+    is_admin = _is_admin(message.from_user.id)
     await message.answer(
-        "لوحة إدارة المنصة.",
-        reply_markup=master_panel_keyboard(),
+        f"Telegram ID: `{message.from_user.id}`\n"
+        f"Admin access: {'YES' if is_admin else 'NO'}"
     )
 
 
@@ -68,7 +84,8 @@ async def help_cb(callback: CallbackQuery) -> None:
         "`/unbanbot BOT_ID`\n"
         "`/create_coupon CODE PERCENT MAX_USES DAYS`\n"
         "`/approve_payment PAYMENT_ID PLAN`\n"
-        "`/reject_payment PAYMENT_ID reason`"
+        "`/reject_payment PAYMENT_ID reason`\n"
+        "`/payments`"
     )
     await callback.answer()
 
@@ -79,7 +96,7 @@ async def newbot_cb(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer("غير مصرح", show_alert=True)
         return
     await state.set_state(MasterStates.waiting_bot_token)
-    await callback.message.answer("أرسل التوكن الآن.")
+    await callback.message.answer("أرسل توكن البوت الآن.")
     await callback.answer()
 
 
@@ -107,8 +124,8 @@ async def stats_cb(callback: CallbackQuery) -> None:
         stats = await get_platform_stats(session)
     await callback.message.answer(
         "إحصائيات المنصة:\n"
-        f"- البوتات: {stats['total_bots']}\n"
-        f"- العاملة: {stats['running_bots']}\n"
+        f"- إجمالي البوتات: {stats['total_bots']}\n"
+        f"- البوتات العاملة: {stats['running_bots']}\n"
         f"- المستخدمون: {stats['users_total']}\n"
         f"- دفعات معلقة: {stats['pending_payments']}"
     )
@@ -116,7 +133,7 @@ async def stats_cb(callback: CallbackQuery) -> None:
 
 
 @router.message(Command("newbot"))
-async def newbot_cmd(message: Message, state: FSMContext) -> None:
+async def newbot_cmd(message: Message, state: FSMContext, bot_manager: BotManager) -> None:
     if not message.from_user or not _is_admin(message.from_user.id):
         return
     parts = _split(message.text or "")
@@ -124,22 +141,22 @@ async def newbot_cmd(message: Message, state: FSMContext) -> None:
         await state.set_state(MasterStates.waiting_bot_token)
         await message.answer("الاستخدام: `/newbot TOKEN`")
         return
-    await _register_bot(message, parts[1])
+    await _register_bot(message, parts[1], bot_manager)
 
 
 @router.message(MasterStates.waiting_bot_token)
-async def newbot_state(message: Message, state: FSMContext) -> None:
+async def newbot_state(message: Message, state: FSMContext, bot_manager: BotManager) -> None:
     if not message.from_user or not _is_admin(message.from_user.id):
         return
     token = (message.text or "").strip()
     if not token:
         await message.answer("أرسل توكن صحيح.")
         return
-    await _register_bot(message, token)
+    await _register_bot(message, token, bot_manager)
     await state.clear()
 
 
-async def _register_bot(message: Message, token: str) -> None:
+async def _register_bot(message: Message, token: str, bot_manager: BotManager) -> None:
     try:
         bot_name, bot_username = await validate_bot_token(token)
     except Exception as exc:
@@ -153,12 +170,20 @@ async def _register_bot(message: Message, token: str) -> None:
             bot_name=bot_name,
             bot_username=bot_username,
         )
+    started = True
+    try:
+        await bot_manager.start_bot(bot.id)
+    except Exception:
+        started = False
+        logger.warning("auto_start_new_client_bot_failed", bot_id=str(bot.id), exc_info=True)
+
     await message.answer(
         "تم إنشاء البوت:\n"
         f"- الاسم: {bot_name}\n"
         f"- المعرف: @{bot_username or '-'}\n"
         f"- BOT_ID: `{bot.id}`\n"
-        "شغله عبر `/startbot BOT_ID`"
+        + (f"- الحالة: {'RUNNING ✅' if started else 'STOPPED ⚠️'}\n")
+        + ("تم تشغيله تلقائيًا." if started else "شغله عبر `/startbot BOT_ID`")
     )
 
 
@@ -186,10 +211,9 @@ async def startbot_cmd(message: Message, bot_manager: BotManager) -> None:
     try:
         bot_id = uuid.UUID(parts[1])
         await bot_manager.start_bot(bot_id)
+        await message.answer(f"تم تشغيل `{bot_id}`.")
     except Exception as exc:
         await message.answer(f"فشل التشغيل: {exc}")
-        return
-    await message.answer(f"تم تشغيل `{bot_id}`.")
 
 
 @router.message(Command("stopbot"))
@@ -203,10 +227,9 @@ async def stopbot_cmd(message: Message, bot_manager: BotManager) -> None:
     try:
         bot_id = uuid.UUID(parts[1])
         await bot_manager.stop_bot(bot_id)
+        await message.answer(f"تم إيقاف `{bot_id}`.")
     except Exception as exc:
         await message.answer(f"فشل الإيقاف: {exc}")
-        return
-    await message.answer(f"تم إيقاف `{bot_id}`.")
 
 
 @router.message(Command("restartbot"))
@@ -220,10 +243,9 @@ async def restartbot_cmd(message: Message, bot_manager: BotManager) -> None:
     try:
         bot_id = uuid.UUID(parts[1])
         await bot_manager.restart_bot(bot_id)
+        await message.answer(f"تمت إعادة تشغيل `{bot_id}`.")
     except Exception as exc:
         await message.answer(f"فشل إعادة التشغيل: {exc}")
-        return
-    await message.answer(f"تمت إعادة تشغيل `{bot_id}`.")
 
 
 @router.message(Command("setplan"))
@@ -238,7 +260,7 @@ async def setplan_cmd(message: Message) -> None:
         bot_id = uuid.UUID(parts[1])
         plan = PlanType[parts[2].upper()]
     except Exception:
-        await message.answer("صيغة plan غير صحيحة.")
+        await message.answer("صيغة الخطة غير صحيحة.")
         return
     async with session_scope() as session:
         await set_subscription_plan(session, bot_id, plan)
@@ -253,8 +275,8 @@ async def stats_cmd(message: Message) -> None:
         stats = await get_platform_stats(session)
     await message.answer(
         "إحصائيات المنصة:\n"
-        f"- البوتات: {stats['total_bots']}\n"
-        f"- العاملة: {stats['running_bots']}\n"
+        f"- إجمالي البوتات: {stats['total_bots']}\n"
+        f"- البوتات العاملة: {stats['running_bots']}\n"
         f"- المستخدمون: {stats['users_total']}\n"
         f"- دفعات معلقة: {stats['pending_payments']}"
     )
@@ -403,8 +425,6 @@ async def payments_cmd(message: Message) -> None:
     if not items:
         await message.answer("لا يوجد طلبات دفع معلقة.")
         return
-    lines = [
-        f"- `{p.id}` | bot `{p.bot_id}` | {p.amount} {p.currency} | by `{p.submitted_by}`"
-        for p in items
-    ]
+    lines = [f"- `{p.id}` | bot `{p.bot_id}` | {p.amount} {p.currency} | by `{p.submitted_by}`" for p in items]
     await message.answer("طلبات الدفع المعلقة:\n" + "\n".join(lines))
+

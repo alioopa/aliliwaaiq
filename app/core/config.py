@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from cryptography.fernet import Fernet
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -31,6 +32,7 @@ class Settings(BaseSettings):
     platform_brand_handle: str = "@PlatformBot"
     bot_token_encryption_key: str = ""
     master_admin_ids: str = ""
+    ops_api_key: str | None = None
 
     broadcast_flood_sleep: float = 0.06
     broadcast_max_retries: int = 5
@@ -51,7 +53,10 @@ class Settings(BaseSettings):
         for item in self.master_admin_ids.split(","):
             item = item.strip()
             if item:
-                parsed.add(int(item))
+                try:
+                    parsed.add(int(item))
+                except ValueError:
+                    continue
         return parsed
 
     @property
@@ -75,9 +80,12 @@ class Settings(BaseSettings):
         if missing:
             joined = ", ".join(missing)
             raise RuntimeError(f"Missing required environment variables: {joined}")
+        try:
+            Fernet(self.bot_token_encryption_key.encode("utf-8"))
+        except Exception as exc:
+            raise RuntimeError("BOT_TOKEN_ENCRYPTION_KEY is invalid. Use Fernet.generate_key().") from exc
 
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
-

@@ -150,3 +150,16 @@ celery -A app.tasks.celery_app.celery_app beat -l info
 - `/add_ad نص الإعلان`
 - `/payment_request amount currency [receipt_url] [note]`
 
+## Troubleshooting (Railway)
+
+- If master bot does not reply:
+  - Make sure `MASTER_BOT_TOKEN` is correct.
+  - Set `MASTER_ADMIN_IDS` to your Telegram numeric ID, or temporarily leave it empty (bootstrap mode now allows access).
+- If webhook seems broken:
+  - Set `WEBHOOK_BASE_URL` exactly to your Railway public web URL (without trailing slash).
+  - Add `OPS_API_KEY` env var.
+  - Call:
+    - `POST /ops/sync-master-webhook` with header `x-ops-key: <OPS_API_KEY>`
+    - `POST /ops/sync-client-webhooks` with header `x-ops-key: <OPS_API_KEY>`
+  - Check:
+    - `GET /ops/status` with header `x-ops-key: <OPS_API_KEY>`
